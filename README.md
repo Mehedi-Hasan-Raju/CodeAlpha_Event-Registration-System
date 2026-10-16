@@ -1,6 +1,9 @@
 # Event Registration System
 
-Express.js + MongoDB (Mongoose) REST API with JWT authentication, user registration management, and an organizer admin panel.
+A backend system for creating events and managing user registrations, built as a feature of a **Code Alpha** project.
+
+Developed by me during my **Backend Development Internship at Code Alpha**.
+
 
 ## Features
 
@@ -97,18 +100,6 @@ Send the token as `Authorization: Bearer <token>`.
 | GET | `/api/admin/events/:id/registrations.csv` | CSV export |
 | PATCH | `/api/admin/registrations/:id/cancel` | cancel an attendee's registration |
 
-### Example (curl)
-
-```bash
-# login
-curl -X POST localhost:5000/api/auth/login -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"Admin@12345"}'
-
-# register for an event
-curl -X POST localhost:5000/api/events/<EVENT_ID>/register \
-  -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/json" \
-  -d '{"phone":"01700000000","tickets":2}'
-```
 
 ## Security notes
 
