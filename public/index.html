@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Event Registration</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>🎟️ Event Registration</h1>
+    <nav>
+      <span id="who" class="meta"></span>
+      <button class="ghost small" id="btnMy">My Registrations</button>
+      <a class="btn small hidden" id="linkAdmin" href="/admin.html">Admin Panel</a>
+      <button class="small" id="btnLogin">Login / Sign up</button>
+      <button class="ghost small hidden" id="btnLogout">Logout</button>
+    </nav>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <input id="search" placeholder="Search events by title, place..." />
+      <button id="btnSearch">Search</button>
+    </div>
+    <div id="events" class="grid"></div>
+    <div class="row" style="justify-content:center;margin-top:16px">
+      <button class="ghost small" id="prev" style="flex:0">« Prev</button>
+      <span id="pageInfo" class="meta" style="flex:0;white-space:nowrap;align-self:center"></span>
+      <button class="ghost small" id="next" style="flex:0">Next »</button>
+    </div>
+
+    <section id="mySection" class="hidden">
+      <h2>My Registrations</h2>
+      <div id="myRegs"></div>
+    </section>
+  </main>
+
+  <!-- Auth modal -->
+  <div class="modal-bg" id="authModal"><div class="modal">
+    <button class="close" onclick="closeModal('authModal')">×</button>
+    <div class="tabs">
+      <button id="tabLogin" class="active">Login</button>
+      <button id="tabSignup">Sign up</button>
+    </div>
+    <form id="authForm">
+      <div id="nameWrap" class="hidden"><label>Full name</label><input id="aName" /></div>
+      <label>Email</label><input id="aEmail" type="email" required />
+      <label>Password</label><input id="aPass" type="password" minlength="6" required />
+      <p><button type="submit" id="authSubmit">Login</button></p>
+    </form>
+  </div></div>
+
+  <!-- Event details + registration form -->
+  <div class="modal-bg" id="eventModal"><div class="modal">
+    <button class="close" onclick="closeModal('eventModal')">×</button>
+    <div id="eventBody"></div>
+  </div></div>
+
+  <div id="toast"></div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    let page = 1, pages = 1, mode = 'login';
+
+    // ---------- auth UI ----------
+    function refreshAuthUI() {
+      const u = Store.user, logged = !!(Store.token && u);
+      document.getElementById('who').textContent = logged ? `Hi, ${u.name}` : '';
+      document.getElementById('btnLogin').classList.toggle('hidden', logged);
+      document.getElementById('btnLogout').classList.toggle('hidden', !logged);
+      document.getElementById('btnMy').classList.toggle('hidden', !logged);
+      document.getElementById('linkAdmin').classList.toggle('hidden', !(logged && u.role === 'organizer'));
+      document.getElementById('mySection').classList.toggle('hidden', !logged);
+      if (logged) loadMy(); else document.getElementById('myRegs').innerHTML = '';
+    }
+    function setMode(m) {
+      mode = m;
+      document.getElementById('tabLogin').classList.toggle('active', m === 'login');
+      document.getElementById('tabSignup').classList.toggle('active', m === 'signup');
+      document.getElementById('nameWrap').classList.toggle('hidden', m === 'login');
+      document.getElementById('aName').required = m === 'signup';
+      document.getElementById('authSubmit').textContent = m === 'login' ? 'Login' : 'Create account';
+    }
+    document.getElementById('tabLogin').onclick = () => setMode('login');
+    document.getElementById('tabSignup').onclick = () => setMode('signup');
+    document.getElementById('btnLogin').onclick = () => { setMode('login'); openModal('authModal'); };
+    document.getElementById('btnLogout').onclick = () => { Store.clear(); refreshAuthUI(); toast('Logged out'); };
+    document.getElementById('btnMy').onclick = () => document.getElementById('mySection').scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('authForm').onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const body = { email: aEmail.value, password: aPass.value };
+        if (mode === 'signup') body.name = aName.value;
+        const d = await api(mode === 'login' ? '/auth/login' : '/auth/register', { method: 'POST', body });
+        Store.save(d.token, d.user);
+        closeModal('authModal');
+        e.target.reset();
+        refreshAuthUI();
+        toast('Welcome, ' + d.user.name);
+      } catch (err) { toast(err.message, true); }
+    };
+
+    // ---------- events ----------
+    async function loadEvents() {
+      const q = encodeURIComponent(document.getElementById('search').value.trim());
+      const d = await api(`/events?page=${page}&limit=9&search=${q}`);
+      pages = d.pages || 1;
+      const box = document.getElementById('events');
+      box.innerHTML = d.events.length ? '' : '<div class="empty card" style="grid-column:1/-1">No upcoming events found.</div>';
+      d.events.forEach((ev) => {
+        const full = ev.seatsLeft === 0;
+        const el = document.createElement('div');
+        el.className = 'card event';
+        el.innerHTML = `
+          <span class="badge">${esc(ev.category)}</span>
+          <h3>${esc(ev.title)}</h3>
+          <div class="meta">📅 ${fmtDate(ev.date)}</div>
+          <div class="meta">📍 ${esc(ev.location)}</div>
+          <div class="meta">💺 ${ev.seatsLeft} / ${ev.capacity} seats left · ${ev.price ? '৳' + ev.price : 'Free'}</div>
+          <p style="margin-top:12px"><button class="small">${full ? 'Full – view details' : 'View & Register'}</button></p>`;
+        el.querySelector('button').onclick = () => showEvent(ev._id);
+        box.appendChild(el);
+      });
+      document.getElementById('pageInfo').textContent = `Page ${page} of ${pages}`;
+      document.getElementById('prev').disabled = page <= 1;
+      document.getElementById('next').disabled = page >= pages;
+    }
+    document.getElementById('btnSearch').onclick = () => { page = 1; loadEvents().catch((e) => toast(e.message, true)); };
+    document.getElementById('search').onkeydown = (e) => { if (e.key === 'Enter') document.getElementById('btnSearch').click(); };
+    document.getElementById('prev').onclick = () => { page--; loadEvents(); };
+    document.getElementById('next').onclick = () => { page++; loadEvents(); };
+
+    async function showEvent(id) {
+      try {
+        const { event: ev } = await api('/events/' + id);
+        const u = Store.user;
+        const body = document.getElementById('eventBody');
+        body.innerHTML = `
+          <h3>${esc(ev.title)}</h3>
+          <span class="badge">${esc(ev.category)}</span>
+          ${ev.status === 'cancelled' ? '<span class="badge bad">Cancelled</span>' : ''}
+          <p>${esc(ev.description)}</p>
+          <div class="meta">📅 ${fmtDate(ev.date)}</div>
+          <div class="meta">📍 ${esc(ev.location)}</div>
+          <div class="meta">👤 Organizer: ${esc(ev.organizer?.name)}</div>
+          <div class="meta">💺 ${ev.seatsLeft} of ${ev.capacity} seats left · ${ev.price ? '৳' + ev.price : 'Free'}</div>
+          <hr style="border:0;border-top:1px solid var(--line);margin:16px 0" />
+          <div id="regArea"></div>`;
+        const area = body.querySelector('#regArea');
+        if (!Store.token) {
+          area.innerHTML = '<p class="meta">Please log in to register.</p><button id="goLogin">Login / Sign up</button>';
+          area.querySelector('#goLogin').onclick = () => { closeModal('eventModal'); document.getElementById('btnLogin').click(); };
+        } else if (ev.status !== 'published') {
+          area.innerHTML = '<p class="meta">Registration is closed for this event.</p>';
+        } else if (ev.seatsLeft === 0) {
+          area.innerHTML = '<p class="meta">Sorry, this event is full.</p>';
+        } else {
+          area.innerHTML = `
+            <h4 style="margin:0">Registration form</h4>
+            <form id="regForm">
+              <label>Attendee name</label><input name="attendeeName" value="${esc(u.name)}" required />
+              <label>Attendee email</label><input name="attendeeEmail" type="email" value="${esc(u.email)}" required />
+              <div class="row">
+                <div><label>Phone</label><input name="phone" /></div>
+                <div><label>Tickets (max ${Math.min(10, ev.seatsLeft)})</label><input name="tickets" type="number" min="1" max="${Math.min(10, ev.seatsLeft)}" value="1" /></div>
+              </div>
+              <label>Notes (optional)</label><textarea name="notes" rows="2"></textarea>
+              <p><button type="submit">Confirm registration</button></p>
+            </form>`;
+          area.querySelector('#regForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const f = Object.fromEntries(new FormData(e.target));
+            try {
+              await api(`/events/${id}/register`, { method: 'POST', body: f });
+              closeModal('eventModal');
+              toast('Registered successfully!');
+              loadEvents(); loadMy();
+            } catch (err) { toast(err.message, true); }
+          };
+        }
+        openModal('eventModal');
+      } catch (err) { toast(err.message, true); }
+    }
+
+    // ---------- my registrations ----------
+    async function loadMy() {
+      const box = document.getElementById('myRegs');
+      try {
+        const { registrations } = await api('/registrations/my');
+        if (!registrations.length) { box.innerHTML = '<div class="card empty">You have not registered for any event yet.</div>'; return; }
+        box.innerHTML = '<div class="card table-wrap"><table><thead><tr><th>Event</th><th>Date</th><th>Tickets</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>';
+        const tb = box.querySelector('tbody');
+        registrations.forEach((r) => {
+          const tr = document.createElement('tr');
+          const ev = r.event;
+          const canCancel = r.status === 'registered';
+          tr.innerHTML = `
+            <td>${ev ? esc(ev.title) : '<i>Event removed</i>'}<div class="meta">${ev ? esc(ev.location) : ''}</div></td>
+            <td>${ev ? fmtDate(ev.date) : '-'}</td>
+            <td>${r.tickets}</td>
+            <td><span class="badge ${canCancel ? 'ok' : 'bad'}">${esc(r.status)}</span></td>
+            <td>${canCancel ? '<button class="danger small">Cancel</button>' : ''}</td>`;
+          if (canCancel) tr.querySelector('button').onclick = async () => {
+            if (!confirm('Cancel this registration?')) return;
+            try { await api('/registrations/' + r._id, { method: 'DELETE' }); toast('Registration cancelled'); loadMy(); loadEvents(); }
+            catch (err) { toast(err.message, true); }
+          };
+          tb.appendChild(tr);
+        });
+      } catch (err) { box.innerHTML = ''; if (!Store.token) refreshAuthUI(); else toast(err.message, true); }
+    }
+
+    refreshAuthUI();
+    loadEvents().catch((e) => toast(e.message, true));
+  </script>
+</body>
+</html>

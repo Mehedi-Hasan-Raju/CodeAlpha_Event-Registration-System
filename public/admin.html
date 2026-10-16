@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Organizer Admin Panel</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="top">
+    <h1>🛠️ Organizer Admin Panel</h1>
+    <nav>
+      <span id="who" class="meta"></span>
+      <a href="/" class="btn small ghost" style="background:transparent;color:var(--brand);border:1px solid var(--line)">Public site</a>
+      <button class="ghost small hidden" id="btnLogout">Logout</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Login / organizer signup -->
+    <section id="loginBox" class="card" style="max-width:440px;margin:40px auto">
+      <div class="tabs">
+        <button id="tabLogin" class="active">Organizer login</button>
+        <button id="tabSignup">Organizer sign up</button>
+      </div>
+      <form id="authForm">
+        <div id="signupFields" class="hidden">
+          <label>Full name</label><input id="aName" />
+          <label>Organizer key</label><input id="aKey" type="password" placeholder="Provided by the system owner" />
+        </div>
+        <label>Email</label><input id="aEmail" type="email" required />
+        <label>Password</label><input id="aPass" type="password" minlength="6" required />
+        <p><button type="submit" id="authSubmit">Login</button></p>
+      </form>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="dash" class="hidden">
+      <div class="stats" id="stats"></div>
+
+      <div class="row" style="align-items:center;margin-top:24px">
+        <h2 style="margin:0;flex:1">My Events</h2>
+        <button id="btnNew" style="flex:0;white-space:nowrap">+ New event</button>
+      </div>
+      <div class="card table-wrap" style="margin-top:12px">
+        <table>
+          <thead><tr><th>Title</th><th>Date</th><th>Status</th><th>Seats</th><th></th></tr></thead>
+          <tbody id="eventRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <!-- Create / edit event -->
+  <div class="modal-bg" id="eventModal"><div class="modal">
+    <button class="close" onclick="closeModal('eventModal')">×</button>
+    <h3 id="eventTitle">New event</h3>
+    <form id="eventForm">
+      <label>Title</label><input name="title" required maxlength="150" />
+      <label>Description</label><textarea name="description" rows="4" required></textarea>
+      <label>Location</label><input name="location" required />
+      <div class="row">
+        <div><label>Date &amp; time</label><input name="date" type="datetime-local" required /></div>
+        <div><label>Capacity</label><input name="capacity" type="number" min="1" required /></div>
+      </div>
+      <div class="row">
+        <div><label>Category</label><input name="category" value="General" /></div>
+        <div><label>Price (৳)</label><input name="price" type="number" min="0" value="0" /></div>
+        <div><label>Status</label>
+          <select name="status">
+            <option value="published">Published</option>
+            <option value="draft">Draft (hidden)</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+      </div>
+      <p><button type="submit">Save event</button></p>
+    </form>
+  </div></div>
+
+  <!-- Registrations -->
+  <div class="modal-bg" id="regModal"><div class="modal wide">
+    <button class="close" onclick="closeModal('regModal')">×</button>
+    <h3 id="regTitle">Registrations</h3>
+    <p><button class="ghost small" id="btnCsv">⬇ Download CSV</button></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Attendee</th><th>Contact</th><th>Tickets</th><th>Status</th><th>Registered</th><th></th></tr></thead>
+        <tbody id="regRows"></tbody>
+      </table>
+    </div>
+  </div></div>
+
+  <div id="toast"></div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    let mode = 'login', editingId = null, currentEventId = null;
+
+    // ---------- auth ----------
+    function setMode(m) {
+      mode = m;
+      tabLogin.classList.toggle('active', m === 'login');
+      tabSignup.classList.toggle('active', m === 'signup');
+      signupFields.classList.toggle('hidden', m === 'login');
+      aName.required = aKey.required = m === 'signup';
+      authSubmit.textContent = m === 'login' ? 'Login' : 'Create organizer account';
+    }
+    tabLogin.onclick = () => setMode('login');
+    tabSignup.onclick = () => setMode('signup');
+
+    authForm.onsubmit = async (e) => {
+      e.preventDefault();
+      try {
+        const body = { email: aEmail.value, password: aPass.value };
+        let path = '/auth/login';
+        if (mode === 'signup') { path = '/auth/register-organizer'; body.name = aName.value; body.organizerKey = aKey.value; }
+        const d = await api(path, { method: 'POST', body });
+        if (d.user.role !== 'organizer') { Store.clear(); throw new Error('This account is not an organizer'); }
+        Store.save(d.token, d.user);
+        authForm.reset();
+        init();
+      } catch (err) { toast(err.message, true); }
+    };
+    btnLogout.onclick = () => { Store.clear(); init(); };
+
+    function init() {
+      const u = Store.user, ok = !!(Store.token && u && u.role === 'organizer');
+      loginBox.classList.toggle('hidden', ok);
+      dash.classList.toggle('hidden', !ok);
+      btnLogout.classList.toggle('hidden', !ok);
+      who.textContent = ok ? u.name : '';
+      if (ok) refresh();
+    }
+
+    // ---------- dashboard ----------
+    async function refresh() {
+      try {
+        const [{ stats: s }, { events }] = await Promise.all([api('/admin/stats'), api('/admin/events')]);
+        document.getElementById('stats').innerHTML = [
+          ['Total events', s.totalEvents], ['Upcoming', s.upcomingEvents],
+          ['Active registrations', s.activeRegistrations], ['Cancelled', s.cancelledRegistrations],
+          ['Seats booked', `${s.seatsBooked} / ${s.totalCapacity}`],
+        ].map(([l, v]) => `<div class="card stat"><b>${esc(v)}</b><span>${l}</span></div>`).join('');
+
+        const tb = eventRows;
+        tb.innerHTML = events.length ? '' : '<tr><td colspan="5" class="empty">No events yet. Create your first one!</td></tr>';
+        events.forEach((ev) => {
+          const tr = document.createElement('tr');
+          const cls = ev.status === 'published' ? 'ok' : ev.status === 'draft' ? 'warn' : 'bad';
+          tr.innerHTML = `
+            <td><b>${esc(ev.title)}</b><div class="meta">${esc(ev.location)}</div></td>
+            <td>${fmtDate(ev.date)}</td>
+            <td><span class="badge ${cls}">${esc(ev.status)}</span></td>
+            <td>${ev.registeredCount} / ${ev.capacity}</td>
+            <td><div class="actions">
+              <button class="small" data-a="regs">Registrations</button>
+              <button class="ghost small" data-a="edit">Edit</button>
+              <button class="danger small" data-a="del">Delete</button>
+            </div></td>`;
+          tr.querySelector('[data-a=regs]').onclick = () => showRegs(ev);
+          tr.querySelector('[data-a=edit]').onclick = () => openForm(ev);
+          tr.querySelector('[data-a=del]').onclick = async () => {
+            if (!confirm(`Delete "${ev.title}" and all its registrations?`)) return;
+            try { await api('/admin/events/' + ev._id, { method: 'DELETE' }); toast('Event deleted'); refresh(); }
+            catch (err) { toast(err.message, true); }
+          };
+          tb.appendChild(tr);
+        });
+      } catch (err) { toast(err.message, true); init(); }
+    }
+
+    // ---------- create / edit ----------
+    function openForm(ev) {
+      editingId = ev ? ev._id : null;
+      eventTitle.textContent = ev ? 'Edit event' : 'New event';
+      eventForm.reset();
+      if (ev) {
+        for (const k of ['title', 'description', 'location', 'capacity', 'category', 'price', 'status']) eventForm.elements[k].value = ev[k];
+        eventForm.elements.date.value = toLocalInput(ev.date);
+      }
+      openModal('eventModal');
+    }
+    btnNew.onclick = () => openForm(null);
+    eventForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(eventForm));
+      f.date = new Date(f.date).toISOString();
+      f.capacity = Number(f.capacity); f.price = Number(f.price || 0);
+      try {
+        await api(editingId ? '/admin/events/' + editingId : '/admin/events', { method: editingId ? 'PUT' : 'POST', body: f });
+        closeModal('eventModal'); toast('Event saved'); refresh();
+      } catch (err) { toast(err.message, true); }
+    };
+
+    // ---------- registrations ----------
+    async function showRegs(ev) {
+      currentEventId = ev._id;
+      regTitle.textContent = 'Registrations – ' + ev.title;
+      await loadRegs();
+      openModal('regModal');
+    }
+    async function loadRegs() {
+      try {
+        const { registrations } = await api(`/admin/events/${currentEventId}/registrations`);
+        regRows.innerHTML = registrations.length ? '' : '<tr><td colspan="6" class="empty">No registrations yet.</td></tr>';
+        registrations.forEach((r) => {
+          const tr = document.createElement('tr');
+          const active = r.status === 'registered';
+          tr.innerHTML = `
+            <td>${esc(r.attendeeName)}<div class="meta">account: ${esc(r.user?.email)}</div>${r.notes ? `<div class="meta">📝 ${esc(r.notes)}</div>` : ''}</td>
+            <td>${esc(r.attendeeEmail)}<div class="meta">${esc(r.phone)}</div></td>
+            <td>${r.tickets}</td>
+            <td><span class="badge ${active ? 'ok' : 'bad'}">${esc(r.status)}</span></td>
+            <td>${fmtDate(r.createdAt)}</td>
+            <td>${active ? '<button class="danger small">Cancel</button>' : ''}</td>`;
+          if (active) tr.querySelector('button').onclick = async () => {
+            if (!confirm('Cancel this attendee\'s registration?')) return;
+            try { await api(`/admin/registrations/${r._id}/cancel`, { method: 'PATCH' }); toast('Cancelled'); loadRegs(); refresh(); }
+            catch (err) { toast(err.message, true); }
+          };
+          regRows.appendChild(tr);
+        });
+      } catch (err) { toast(err.message, true); }
+    }
+    btnCsv.onclick = async () => {
+      try {
+        const res = await api(`/admin/events/${currentEventId}/registrations.csv`, { raw: true });
+        const url = URL.createObjectURL(await res.blob());
+        const a = document.createElement('a');
+        a.href = url; a.download = 'registrations.csv'; a.click();
+        URL.revokeObjectURL(url);
+      } catch (err) { toast(err.message, true); }
+    };
+
+    init();
+  </script>
+</body>
+</html>
